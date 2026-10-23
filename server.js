@@ -17,14 +17,14 @@ const broadcast = (key) => {
   if (!party) return;
   const members = {};
   for (const c of party) {
-    members[c.name] = { hp: c.hp, chakra: c.chakra, status: c.status, avatar: c.avatar, mode: c.mode, mode_t: c.modeT, inv: c.inv, focus: c.focus, frozen: c.frozen };
+    members[c.name] = { hp: c.hp, chakra: c.chakra, status: c.status, avatar: c.avatar, mode: c.mode, mode_t: c.modeT, inv: c.inv, focus: c.focus, frozen: c.frozen, combat: c.combat };
   }
   const msg = JSON.stringify({ t: "state", members });
   for (const c of party) if (c.ws.readyState === 1) c.ws.send(msg);
 };
 
 wss.on("connection", (ws) => {
-  const client = { ws, name: null, key: null, hp: null, chakra: null, status: null, avatar: null, mode: null, modeT: null, inv: false, focus: true, frozen: false };
+  const client = { ws, name: null, key: null, hp: null, chakra: null, status: null, avatar: null, mode: null, modeT: null, inv: false, focus: true, frozen: false, combat: false };
 
   ws.on("message", (raw) => {
     let m;
@@ -49,6 +49,7 @@ wss.on("connection", (ws) => {
       client.inv = m.inv === true;
       client.focus = m.focus !== false;
       client.frozen = m.frozen === true;
+      client.combat = m.combat === true;
       broadcast(client.key);
     }
   });
