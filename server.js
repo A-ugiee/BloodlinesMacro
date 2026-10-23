@@ -8,17 +8,19 @@ const server = http.createServer((req, res) => {
 const wss = new WebSocketServer({ server });
 const parties = new Map();
 
+const pct = (v) => (Number.isFinite(v) ? Math.max(0, Math.min(100, Math.round(v))) : null);
+
 const broadcast = (key) => {
   const party = parties.get(key);
   if (!party) return;
   const members = {};
-  for (const c of party) members[c.name] = c.hp;
+  for (const c of party) members[c.name] = { hp: c.hp, chakra: c.chakra, status: c.status };
   const msg = JSON.stringify({ t: "state", members });
   for (const c of party) if (c.ws.readyState === 1) c.ws.send(msg);
 };
 
 wss.on("connection", (ws) => {
-  const client = { ws, name: null, hp: null, key: null };
+  const client = { ws, name: null, key: null, hp: null, chakra: null, status: null };
 
   ws.on("message", (raw) => {
     let m;
@@ -33,8 +35,10 @@ wss.on("connection", (ws) => {
       if (!parties.has(client.key)) parties.set(client.key, new Set());
       parties.get(client.key).add(client);
       broadcast(client.key);
-    } else if (m.t === "hp" && client.key && Number.isFinite(m.hp)) {
-      client.hp = Math.max(0, Math.min(100, Math.round(m.hp)));
+    } else if (m.t === "update" && client.key) {
+      client.hp = pct(m.hp);
+      client.chakra = pct(m.chakra);
+      client.status = m.status === "menu" ? "menu" : "game";
       broadcast(client.key);
     }
   });
