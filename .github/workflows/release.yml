@@ -1,0 +1,36 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: client
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - run: python -m pip install -r requirements.txt pyinstaller
+
+      - run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart("v")
+          (Get-Content PartyUI.py) -replace '^VERSION = .*', "VERSION = `"$version`"" | Set-Content PartyUI.py
+          Select-String -Path PartyUI.py -Pattern '^VERSION = '
+
+      - run: python -m PyInstaller --noconfirm --onefile --windowed --name BloodlinesParty --collect-submodules websockets --collect-all winrt PartyUI.py
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: client/dist/BloodlinesParty.exe
+          generate_release_notes: true
