@@ -418,14 +418,20 @@ def version_tuple(v):
 
 def latest_release():
     req = urllib.request.Request(
-        f"https://api.github.com/repos/{REPO}/releases/latest",
+        f"https://api.github.com/repos/{REPO}/releases?per_page=30",
         headers={"Accept": "application/vnd.github+json", "User-Agent": "BloodlinesParty"},
     )
     with urllib.request.urlopen(req, timeout=8, context=SSL) as r:
-        rel = json.load(r)
-    asset = next((a for a in rel.get("assets", []) if a["name"] == ASSET), None)
-    if asset and version_tuple(rel["tag_name"]) > version_tuple(VERSION):
-        return rel["tag_name"], asset
+        releases = json.load(r)
+    best = None
+    for rel in releases:
+        if rel.get("draft") or rel.get("prerelease"):
+            continue
+        asset = next((a for a in rel.get("assets", []) if a["name"] == ASSET), None)
+        if asset and (best is None or version_tuple(rel["tag_name"]) > version_tuple(best[0])):
+            best = (rel["tag_name"], asset)
+    if best and version_tuple(best[0]) > version_tuple(VERSION):
+        return best
     return None
 
 
