@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import platform
 import re
 import ssl
 import subprocess
@@ -352,6 +353,26 @@ async def receive(ws, state):
             state["members"] = m["members"]
 
 
+def system_info(cfg, state):
+    info = {"version": VERSION, "areas": [k for k, _, _ in AREAS if k in cfg], "ocr": bool(state.get("ocr"))}
+    try:
+        info["os"] = f"{platform.system()} {platform.release()} ({platform.version()})"
+    except Exception:
+        pass
+    try:
+        with MSS() as sct:
+            m = sct.monitors[1]
+            info["screen"] = f"{m['width']}x{m['height']}"
+    except Exception:
+        pass
+    if WIN:
+        try:
+            info["scale"] = round(ctypes.windll.user32.GetDpiForSystem() * 100 / 96)
+        except Exception:
+            pass
+    return info
+
+
 async def sender(state):
     while True:
         cfg, gen = state["cfg"], state["gen"]
@@ -363,7 +384,10 @@ async def sender(state):
         try:
             url = cfg.get("server") or DEFAULT_SERVER
             async with connect(url, open_timeout=10, ssl=SSL if url.startswith("wss://") else None) as ws:
-                await ws.send(json.dumps({"t": "join", "party": cfg["party"], "name": cfg["name"], "avatar": cfg.get("avatar", "")}))
+                await ws.send(json.dumps({
+                    "t": "join", "party": cfg["party"], "name": cfg["name"], "avatar": cfg.get("avatar", ""),
+                    "sys": system_info(cfg, state),
+                }))
                 state["status"] = f"Connected to party '{cfg['party']}'"
                 recv = asyncio.create_task(receive(ws, state))
                 last = None
@@ -464,10 +488,10 @@ def hwnd_of(win):
     return ctypes.windll.user32.GetParent(win.winfo_id()) or win.winfo_id()
 
 
-def exclude_from_capture(win):
+def set_capturable(win, visible):
     if WIN:
         try:
-            ctypes.windll.user32.SetWindowDisplayAffinity(hwnd_of(win), 0x11)
+            ctypes.windll.user32.SetWindowDisplayAffinity(hwnd_of(win), 0x00 if visible else 0x11)
         except Exception:
             pass
 
@@ -871,10 +895,25 @@ def main():
     switch(foot, pics, toggle_pics).pack(side="left")
     tk.Label(foot, text="Profile pictures", bg=BG, fg=TEXT, font=(FONT, 10)).pack(side="left", padx=8)
     avatars = Avatars()
+
+    def toggle_share():
+        cfg["overlay_share"] = share.get()
+        save(cfg)
+        set_capturable(ov, share.get())
+
+    share = tk.BooleanVar(value=cfg.get("overlay_share", False))
+    foot2 = tk.Frame(frm, bg=BG)
+    foot2.grid(row=6, column=0, sticky="we", pady=(10, 0))
+    switch(foot2, share, toggle_share).pack(side="left")
+    tk.Label(foot2, text="Show overlay on screen share", bg=BG, fg=TEXT, font=(FONT, 10)).pack(side="left", padx=8)
+    tk.Label(
+        frm, text="When on, keep the overlay off your bars, mode icon and In Combat text, or it will block the readings.",
+        bg=BG, fg=MUTED, font=(FONT, 8), anchor="w", justify="left", wraplength=360,
+    ).grid(row=7, column=0, sticky="we", pady=(2, 0))
     tk.Label(
         frm, text="Drag to move  ·  drag the corner or scroll to resize  ·  right-click to hide",
         bg=BG, fg=MUTED, font=(FONT, 8), anchor="w",
-    ).grid(row=6, column=0, sticky="we", pady=(4, 0))
+    ).grid(row=8, column=0, sticky="we", pady=(10, 0))
 
     view = {"w": cfg.get("overlay_width", 260)}
     ov.overrideredirect(True)
@@ -993,9 +1032,13 @@ def main():
 
     refresh_areas()
     root.update_idletasks()
+    need_w, need_h = frm.winfo_reqwidth() + 32, frm.winfo_reqheight() + 28
+    root.minsize(max(380, need_w), need_h)
+    w, _, h = cfg.get("window", "440x780").partition("x")
+    root.geometry(f"{max(int(w), need_w)}x{max(int(h), need_h)}")
     dark_titlebar(root)
     root.deiconify()
-    root.after(300, lambda: exclude_from_capture(ov))
+    root.after(300, lambda: set_capturable(ov, share.get()))
     tick()
     root.mainloop()
 

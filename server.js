@@ -4,6 +4,52 @@ const { WebSocketServer } = require("ws");
 const stats = { started: Date.now(), msgsIn: 0, msgsOut: 0, bytesIn: 0, bytesOut: 0 };
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 
+const SYS_KEYS = ["version", "os", "screen", "scale", "ocr", "areas"];
+const cleanSys = (raw) => {
+  if (!raw || typeof raw !== "object") return null;
+  const out = {};
+  for (const k of SYS_KEYS) {
+    const v = raw[k];
+    if (typeof v === "string") out[k] = v.slice(0, 100);
+    else if (typeof v === "boolean" || (typeof v === "number" && Number.isFinite(v))) out[k] = v;
+    else if (Array.isArray(v)) out[k] = v.filter((x) => typeof x === "string").slice(0, 10).map((x) => x.slice(0, 20));
+  }
+  return out;
+};
+const ago = (t) => (t ? Math.round((Date.now() - t) / 1000) : null);
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+const users = () =>
+  [...parties].flatMap(([key, party]) =>
+    [...party].map((c) => ({
+      party: key, name: c.name, connected_s: ago(c.joinedAt), last_update_s: ago(c.updatedAt),
+      hp: c.hp, chakra: c.chakra, status: c.status, mode: c.mode, mode_t: c.modeT,
+      combat: c.combat, inv: c.inv, focus: c.focus, frozen: c.frozen, sys: c.sys,
+    })),
+  );
+
+const dur = (s) => (s == null ? "-" : s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`);
+
+const adminPage = () => {
+  const rows = users()
+    .map((u) => {
+      const sys = u.sys || {};
+      const state = u.status === "menu" ? "Menu" : [u.combat && "Combat", u.inv && "Inventory", u.focus === false && "Tabbed out"].filter(Boolean).join(", ") || "In game";
+      return `<tr><td>${esc(u.party)}</td><td><b>${esc(u.name)}</b></td><td>${esc(u.hp ?? "-")}%</td><td>${esc(u.chakra ?? "-")}%</td>
+<td>${esc(u.mode ?? "-")}${u.mode_t != null ? " " + esc(u.mode_t) + "s" : ""}</td><td>${esc(state)}</td>
+<td>${dur(u.connected_s)}</td><td>${dur(u.last_update_s)} ago</td><td>${esc(sys.version ?? "?")}</td><td>${esc(sys.os ?? "?")}</td>
+<td>${esc(sys.screen ?? "?")}${sys.scale ? " @ " + esc(sys.scale) + "%" : ""}</td><td>${sys.ocr ? "yes" : "no"}</td><td>${esc((sys.areas || []).join(", ") || "none")}</td></tr>`;
+    })
+    .join("");
+  return `<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="3"><title>Bloodlines relay</title>
+<style>body{font:14px system-ui,sans-serif;background:#111214;color:#ececee;margin:24px}table{border-collapse:collapse;width:100%}
+th,td{padding:6px 10px;border-bottom:1px solid #2a2c31;text-align:left;white-space:nowrap}th{color:#8b8d94;font-weight:600}
+.m{color:#8b8d94}</style><h2>Bloodlines relay</h2>
+<p class="m">Up ${dur(Math.round((Date.now() - stats.started) / 1000))} · ${wss.clients.size} connected · ${stats.msgsIn} msgs in · ${Math.round(stats.bytesOut / 1024)} KB out · refreshes every 3s</p>
+<table><tr><th>Party</th><th>Name</th><th>HP</th><th>Chakra</th><th>Mode</th><th>State</th><th>Online</th><th>Last update</th><th>App</th><th>Windows</th><th>Screen</th><th>OCR</th><th>Areas set</th></tr>
+${rows || '<tr><td colspan="13" class="m">Nobody connected</td></tr>'}</table>`;
+};
+
 const snapshot = () => {
   const out = {
     uptime_s: Math.round((Date.now() - stats.started) / 1000),
@@ -14,21 +60,22 @@ const snapshot = () => {
     kb_out: Math.round(stats.bytesOut / 1024),
     parties: {},
   };
-  for (const [key, party] of parties) {
-    out.parties[key] = [...party].map((c) => ({
-      name: c.name, hp: c.hp, chakra: c.chakra, status: c.status, mode: c.mode, mode_t: c.modeT,
-      combat: c.combat, inv: c.inv, focus: c.focus, frozen: c.frozen,
-    }));
-  }
+  for (const u of users()) (out.parties[u.party] ||= []).push(u);
   return out;
 };
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, "http://relay");
   const admin = process.env.ADMIN_KEY;
-  if (url.pathname === "/stats" && admin && url.searchParams.get("key") === admin) {
+  const authed = admin && url.searchParams.get("key") === admin;
+  if (url.pathname === "/stats" && authed) {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify(snapshot(), null, 2));
+    return;
+  }
+  if (url.pathname === "/admin" && authed) {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(adminPage());
     return;
   }
   res.writeHead(200);
@@ -58,7 +105,7 @@ const broadcast = (key) => {
 };
 
 wss.on("connection", (ws) => {
-  const client = { ws, name: null, key: null, hp: null, chakra: null, status: null, avatar: null, mode: null, modeT: null, inv: false, focus: true, frozen: false, combat: false };
+  const client = { ws, name: null, key: null, hp: null, chakra: null, status: null, avatar: null, mode: null, modeT: null, inv: false, focus: true, frozen: false, combat: false, sys: null, joinedAt: null, updatedAt: null };
 
   ws.on("message", (raw) => {
     stats.msgsIn++;
@@ -73,6 +120,8 @@ wss.on("connection", (ws) => {
       client.key = m.party.slice(0, 64);
       client.name = m.name.slice(0, 24);
       client.avatar = typeof m.avatar === "string" && /^https?:\/\//i.test(m.avatar) ? m.avatar.slice(0, 500) : null;
+      client.sys = cleanSys(m.sys);
+      client.joinedAt = Date.now();
       if (!parties.has(client.key)) parties.set(client.key, new Set());
       parties.get(client.key).add(client);
       log(`join  party=${client.key} name=${client.name} (${parties.get(client.key).size} in party)`);
@@ -87,6 +136,7 @@ wss.on("connection", (ws) => {
       client.focus = m.focus !== false;
       client.frozen = m.frozen === true;
       client.combat = m.combat === true;
+      client.updatedAt = Date.now();
       if (process.env.LOG_UPDATES === "1") log(`update party=${client.key} name=${client.name}`, JSON.stringify(m));
       broadcast(client.key);
     }
