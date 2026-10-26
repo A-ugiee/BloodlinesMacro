@@ -351,6 +351,8 @@ async def receive(ws, state):
         m = json.loads(raw)
         if m.get("t") == "state":
             state["members"] = m["members"]
+        elif m.get("t") == "update_now":
+            threading.Thread(target=check_update, args=(state,), daemon=True).start()
 
 
 def system_info(cfg, state):
@@ -463,6 +465,30 @@ def download_update(asset, progress):
     )
 
 
+UPDATE_LOCK = threading.Lock()
+
+
+def check_update(state):
+    if not getattr(sys, "frozen", False) or VERSION == "dev" or not UPDATE_LOCK.acquire(blocking=False):
+        return
+    try:
+        found = latest_release()
+        if not found:
+            return
+        tag, asset = found
+        try:
+            state["update"] = f"Updating to {tag}..."
+            download_update(asset, lambda d, t: state.update(update=f"Updating to {tag}  {d * 100 // t if t else 0}%"))
+            state["update"] = f"Restarting into {tag}..."
+            state["restart"] = True
+        except Exception as e:
+            state["update"] = f"Update to {tag} failed ({type(e).__name__})"
+    except Exception:
+        pass
+    finally:
+        UPDATE_LOCK.release()
+
+
 def updater(state):
     if not getattr(sys, "frozen", False) or VERSION == "dev":
         return
@@ -473,20 +499,7 @@ def updater(state):
             break
         except OSError:
             time.sleep(1)
-    try:
-        found = latest_release()
-    except Exception:
-        return
-    if not found:
-        return
-    tag, asset = found
-    try:
-        state["update"] = f"Updating to {tag}..."
-        download_update(asset, lambda d, t: state.update(update=f"Updating to {tag}  {d * 100 // t if t else 0}%"))
-        state["update"] = f"Restarting into {tag}..."
-        state["restart"] = True
-    except Exception as e:
-        state["update"] = f"Update to {tag} failed ({type(e).__name__})"
+    check_update(state)
 
 
 def hwnd_of(win):

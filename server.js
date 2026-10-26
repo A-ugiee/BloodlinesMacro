@@ -30,7 +30,11 @@ const users = () =>
 
 const dur = (s) => (s == null ? "-" : s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`);
 
-const adminPage = () => {
+const btn = (key, label, party, name) =>
+  `<form method="post" action="/admin/update?key=${encodeURIComponent(key)}${party != null ? "&party=" + encodeURIComponent(party) + "&name=" + encodeURIComponent(name) : ""}" style="margin:0">` +
+  `<button>${label}</button></form>`;
+
+const adminPage = (key, note) => {
   const rows = users()
     .map((u) => {
       const sys = u.sys || {};
@@ -38,16 +42,20 @@ const adminPage = () => {
       return `<tr><td>${esc(u.party)}</td><td><b>${esc(u.name)}</b></td><td>${esc(u.hp ?? "-")}%</td><td>${esc(u.chakra ?? "-")}%</td>
 <td>${esc(u.mode ?? "-")}${u.mode_t != null ? " " + esc(u.mode_t) + "s" : ""}</td><td>${esc(state)}</td>
 <td>${dur(u.connected_s)}</td><td>${dur(u.last_update_s)} ago</td><td>${esc(sys.version ?? "?")}</td><td>${esc(sys.os ?? "?")}</td>
-<td>${esc(sys.screen ?? "?")}${sys.scale ? " @ " + esc(sys.scale) + "%" : ""}</td><td>${sys.ocr ? "yes" : "no"}</td><td>${esc((sys.areas || []).join(", ") || "none")}</td></tr>`;
+<td>${esc(sys.screen ?? "?")}${sys.scale ? " @ " + esc(sys.scale) + "%" : ""}</td><td>${sys.ocr == null ? "?" : sys.ocr ? "yes" : "no"}</td><td>${sys.areas ? esc(sys.areas.join(", ") || "none") : "?"}</td>
+<td>${btn(key, "Update", u.party, u.name)}</td></tr>`;
     })
     .join("");
   return `<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="3"><title>Bloodlines relay</title>
 <style>body{font:14px system-ui,sans-serif;background:#111214;color:#ececee;margin:24px}table{border-collapse:collapse;width:100%}
 th,td{padding:6px 10px;border-bottom:1px solid #2a2c31;text-align:left;white-space:nowrap}th{color:#8b8d94;font-weight:600}
-.m{color:#8b8d94}</style><h2>Bloodlines relay</h2>
+.m{color:#8b8d94}button{background:#d12f55;color:#fff;border:0;border-radius:6px;padding:4px 10px;font:600 12px system-ui;cursor:pointer}
+button:hover{background:#e64a6e}.note{color:#3ecf72}.bar{display:flex;gap:16px;align-items:center}</style>
+<div class="bar"><h2>Bloodlines relay</h2>${btn(key, "Update everyone")}${note ? `<span class="note">${esc(note)}</span>` : ""}</div>
 <p class="m">Up ${dur(Math.round((Date.now() - stats.started) / 1000))} · ${wss.clients.size} connected · ${stats.msgsIn} msgs in · ${Math.round(stats.bytesOut / 1024)} KB out · refreshes every 3s</p>
-<table><tr><th>Party</th><th>Name</th><th>HP</th><th>Chakra</th><th>Mode</th><th>State</th><th>Online</th><th>Last update</th><th>App</th><th>Windows</th><th>Screen</th><th>OCR</th><th>Areas set</th></tr>
-${rows || '<tr><td colspan="13" class="m">Nobody connected</td></tr>'}</table>`;
+<table><tr><th>Party</th><th>Name</th><th>HP</th><th>Chakra</th><th>Mode</th><th>State</th><th>Online</th><th>Last update</th><th>App</th><th>Windows</th><th>Screen</th><th>OCR</th><th>Areas set</th><th></th></tr>
+${rows || '<tr><td colspan="14" class="m">Nobody connected</td></tr>'}</table>
+<p class="m">Update asks apps to install the newest GitHub release now. Only works on apps that already have this feature; older apps update the next time they restart.</p>`;
 };
 
 const snapshot = () => {
@@ -75,7 +83,25 @@ const server = http.createServer((req, res) => {
   }
   if (url.pathname === "/admin" && authed) {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-    res.end(adminPage());
+    res.end(adminPage(admin, url.searchParams.get("note")));
+    return;
+  }
+  if (url.pathname === "/admin/update" && req.method === "POST" && authed) {
+    const party = url.searchParams.get("party");
+    const name = url.searchParams.get("name");
+    let sent = 0;
+    for (const [key, members] of parties) {
+      for (const c of members) {
+        if (party != null && (key !== party || c.name !== name)) continue;
+        if (c.ws.readyState !== 1) continue;
+        c.ws.send(JSON.stringify({ t: "update_now" }));
+        sent++;
+      }
+    }
+    log(`admin update request -> ${party != null ? `${name} in ${party}` : "everyone"} (${sent} sent)`);
+    const note = party != null ? `Update sent to ${name}` : `Update sent to ${sent} app${sent === 1 ? "" : "s"}`;
+    res.writeHead(303, { location: `/admin?key=${encodeURIComponent(admin)}&note=${encodeURIComponent(note)}` });
+    res.end();
     return;
   }
   res.writeHead(200);
